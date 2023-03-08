@@ -299,6 +299,9 @@ kurd.coop.by.year <- split(kurd_net, kurd_net$onset)
 bul_net <- dplyr::select(unique(rbind(ott_net[ott_net$to %in% dplyr::select(dplyr::filter(ott_elites$id, Ethnicity == "Macedo/Bulgarian"), Code)$Code,],
              ott_net[ott_net$from %in% dplyr::select(dplyr::filter(ott_elites$id, Ethnicity == "Macedo/Bulgarian"), Code)$Code,])),from,to,onset)
 bul.coop.by.year <- split(bul_net, bul_net$onset)
+```
+
+```{r - Descriptive Stats - Network Size contd}
 
 #Turn each network into igraph data
 alb.coop.by.year <- lapply(alb.coop.by.year, function(x){
@@ -308,6 +311,10 @@ alb.coop.by.year <- lapply(alb.coop.by.year, function(x){
   extract <- gsub("^([0-9]){2}", "t", as.character(x$onset[1]))
   #create vertices
   vertices <- data.frame(Code=c(edges$from, edges$to)) %>% distinct()
+  aut.modified <- cbind(ott_elites2$aut.modified[, 1], ott_elites2$aut.modified[, extract])
+  aut.modified[,2] <- as.character(aut.modified[,2])
+  attribute <- setNames(cbind(aut.modified[1],aut.modified[2]), c("Code", "ideo.pos"))
+  vertices <- left_join(vertices, attribute, by="Code")
   x <- igraph::graph_from_data_frame(d = edges, vertices = vertices, directed = FALSE)
   }
   )
@@ -320,6 +327,10 @@ kurd.coop.by.year <- lapply(kurd.coop.by.year, function(x){
   extract <- gsub("^([0-9]){2}", "t", as.character(x$onset[1]))
   #create vertices
   vertices <- data.frame(Code=c(edges$from, edges$to)) %>% distinct()
+  aut.modified <- cbind(ott_elites2$aut.modified[, 1], ott_elites2$aut.modified[, extract])
+  aut.modified[,2] <- as.character(aut.modified[,2])
+  attribute <- setNames(cbind(aut.modified[1],aut.modified[2]), c("Code", "ideo.pos"))
+  vertices <- left_join(vertices, attribute, by="Code")
   x <- igraph::graph_from_data_frame(d = edges, vertices = vertices, directed = FALSE)
   }
   )
@@ -331,15 +342,23 @@ bul.coop.by.year <- lapply(bul.coop.by.year, function(x){
   extract <- gsub("^([0-9]){2}", "t", as.character(x$onset[1]))
   #create vertices
   vertices <- data.frame(Code=c(edges$from, edges$to)) %>% distinct()
+  aut.modified <- cbind(ott_elites2$aut.modified[, 1], ott_elites2$aut.modified[, extract])
+  aut.modified[,2] <- as.character(aut.modified[,2])
+  attribute <- setNames(cbind(aut.modified[1],aut.modified[2]), c("Code", "ideo.pos"))
+  vertices <- left_join(vertices, attribute, by="Code")
   x <- igraph::graph_from_data_frame(d = edges, vertices = vertices, directed = FALSE)
   }
   )
 
 #check
 alb.coop.by.year
-ott.coop.by.year
 kurd.coop.by.year 
 bul.coop.by.year
+
+```
+
+
+```{r - Descriptive Stats - Network Size contd - 2}
 
 #storage for size of each of network
 gsize.byyearalb <- data.frame(years = as.numeric(names(alb.coop.by.year[-1])), gsize = double(length=length(alb.coop.by.year[-1])), group = c("Albanian"))
@@ -396,8 +415,10 @@ gsize.byyear2 <- arrange(rbind(gsize.byyearalb,
                                gsize.byyearkurd,
                                gsize.byyearbul), years)
 
+```
 
 
+```{r - Descriptive Stats - Network Size Visualization}
 #Visualize with faceting
 
 #visualize proportions
@@ -433,8 +454,80 @@ ggplot() +
 
 ```
 
-```{r}
 
+```{r - Descriptive Stats - Ideology Proportion}
+#Networks by ethnic groups
+alb.coop.by.year.2 <- split(alb_net, alb_net$onset)
+kurd.coop.by.year.2 <- split(kurd_net, kurd_net$onset)
+bul.coop.by.year.2 <- split(bul_net, bul_net$onset)
+
+alb_net <- dplyr::select(unique(rbind(ott_net[ott_net$to %in% dplyr::select(dplyr::filter(ott_elites$id, Ethnicity == "Albanian"), Code)$Code,],
+             ott_net[ott_net$from %in% dplyr::select(dplyr::filter(ott_elites$id, Ethnicity == "Albanian"), Code)$Code,])),from,to,onset)
+
+alb_elites <- rbind(select(alb_net,code=from,year=onset),select(alb_net,code=to,year=onset)) %>%
+  filter(code %in% pull(filter(ott_elites$id, Ethnicity == "Albanian"),Code)) %>%
+  arrange(code, year) %>%
+  distinct()
+
+alb_elites <- cbind(alb_elites, ide.pos=double(length=nrow(alb_elites)))
+
+for(i in 1:nrow(alb_elites)){
+  alb_elites[i,]$ide.pos <- ott_elites2$aut.modified %>%
+    filter(Code == alb_elites[i,]$code) %>%
+    pull(which(names(ott_elites2$aut.modified) == gsub("^([0-9]){2}", "t", as.character(alb_elites[i,]$year))))
+}
+
+alb_elites.2 <- filter(alb_elites, ide.pos != 9)
+
+alb_elites.2$ide.pos <- factor(alb_elites.2$ide.pos, levels = c(2,1,0))
+
+alb_elites.3 <- alb_elites.2 %>%
+  group_by(year, ide.pos) %>%
+  summarise(n = n()) %>%
+  mutate(freq = n/sum(n)) %>%
+  arrange(year, ide.pos)
+
+
+# Plot again
+ggplot(alb_elites.3, aes(x=year, y=n, fill=ide.pos)) + 
+  geom_area() +
+  scale_fill_discrete(labels=c('Autonomist', 'Tactically Aut. & Ideologically Sec', 'Secessionist')) +
+  guides(fill=guide_legend(title="Ideological Position")) +
+  scale_y_continuous(name = 'Elite Share and Number') 
+
+
+
+```
+
+
+```{r - Descriptive Stats - Ideology Proportion}
+# create data
+time <- as.numeric(rep(seq(1,7),each=7))  # x Axis
+value <- runif(49, 10, 100)               # y Axis
+group <- rep(LETTERS[1:7],times=7)        # group, one shape per group
+data <- data.frame(time, value, group)
+
+# Give a specific order:
+data$group <- factor(data$group , levels=c("B", "A", "D", "E", "G", "F", "C") )
+
+# Plot again
+ggplot(data, aes(x=time, y=value, fill=group)) + 
+    geom_area()
+
+# Note: you can also sort levels alphabetically:
+myLevels <- levels(data$group)
+data$group <- factor(data$group , levels=sort(myLevels) )
+
+# Note: sort followinig values at time = 5
+myLevels <- data %>%
+  filter(time==6) %>%
+  arrange(value)
+data$group <- factor(data$group , levels=myLevels$group )
+
+```
+
+
+```{r - Descriptive Stats - Ideology Proportion}
 threat.prop <- data.frame(year=numeric(), nothreat=integer(), threat=integer(), prop.t=integer())
 for(i in 1:length(ott.coop.by.year)){
   threat.prop[i,] <- data.frame(year=as.numeric(names(ott.coop.by.year[i])),
