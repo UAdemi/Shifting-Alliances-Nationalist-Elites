@@ -1,0 +1,1585 @@
+---
+title: "Ottoman TERGM Analysis.v.10"
+author: "Ubeydullah Ademi"
+date: "3/10/2023"
+output: html_document
+---
+
+
+```{r Packages}
+
+
+# Package names
+packages <- c("sna", "tsna", "ndtv", "readxl", "igraph", "statnet", "stringr", "btergm", "xergm.common", "ggplot2", "tidyverse",
+              "dplyr", "httr", "texreg", "knitr", "intergraph", "GGally", "forcats", "flextable", "officer", "scales","btergm")
+
+
+
+# Packages loading
+invisible(lapply(packages, library, character.only = TRUE))
+
+```
+
+```{r Illustrative Figures for Network Analysis}
+
+#set the color
+palf <- colorRampPalette(c("gray80", "gold"))
+
+# Open pdf file for f
+pdf(file="illustrative figures.pdf" )
+
+#set color
+palf <- colorRampPalette(c("gray80", "gold")) 
+# create a 1X3 grid
+par(mfrow=c(1,3))
+  
+#draw figure 1
+plot(graph(edges=c("A","B","A","C"), directed=F), vertex.size=25, vertex.color=palf(3),sub="Two-Star")
+plot(graph(edges=c("A","B","A","C","A","D"), directed=F), vertex.size=25, vertex.color=palf(4),sub="Three-Star")
+plot(graph(edges=c("A","B","A","C","A","D","A","E"), directed=F),vertex.size=25, vertex.color=palf(5), sub="Four-Star")
+
+#create 2X2 grid)
+par(mfrow=c(2,2))
+network1 <- graph(edges=c("A","B","A","C1","B","C1"), directed=F)
+deg1 <- degree(network1, mode="all")
+plot(network1, vertex.size=deg1*10, vertex.color=palf(3), sub="1-Triangle",vertex.label.cex=deg1*0.25)
+
+network2 <- graph(edges=c("A","B","A","C1","A","C2","B","C1","B","C2"), directed=F)
+deg2 <- degree(network2, mode="all")
+plot(network2, vertex.size=deg2*10, vertex.color=palf(4), sub="2-Triangle", vertex.label.cex=deg2*0.25)
+
+network3 <- graph(edges=c("A","B","A","C1","A","C2","A","C3","B","C1","B","C2","B","C3"), directed=F)
+deg3 <- degree(network3, mode="all")
+plot(network3, vertex.size=deg3*10, vertex.color=palf(5), sub="3-Triangle", vertex.label.cex=deg3*0.25)
+
+network4 <- graph(edges=c("A","B","A","C1","A","C2","A","C3","A","C4","B","C1","B","C2","B","C3","B","C4"), directed=F)
+deg4 <- degree(network4, mode="all")
+plot(network4, vertex.size=deg4*10, vertex.color=palf(6), sub="4-Triangle", vertex.label.cex=deg4*0.25)
+
+dev.off()
+
+```
+
+```{r import and structure data}
+
+path <- c("/Users/ubeydullahademi/Desktop/Tez Kodları ve Verisetleri/elitler.veriseti.v7.xlsx") #elitler.veriset.v7.xlsx
+
+#ott_elites and ott_net include all the elites in the dataset
+ott_elites <- path %>% 
+  excel_sheets() %>%
+  set_names() %>%
+  map(read_excel,
+      path = path)
+
+ott_net <- ott_elites$ott_net
+
+#ott_elites2 and ott_net2 include only the nationalist elites and their cooperation network
+ott_elites2 <- ott_elites
+ott_net2 <- ott_elites2$ott_net
+
+#filter the nationalist elites
+ott_elites2 <- lapply(ott_elites2[-12], function(x){
+  x <- x[which(ott_elites$id$Ethnicity == "Albanian" | ott_elites$id$Ethnicity == "Kurdish"  |  ott_elites$id$Ethnicity == "Macedo/Bulgarian"),]
+  return(x)
+}
+)
+
+#filter the cooperation ties of the nationalist elites
+ott_net2 <- ott_net2[ott_net2$from %in% ott_elites$id[ott_elites$id$Ethnicity == "Albanian" | ott_elites$id$Ethnicity == "Kurdish"  |  ott_elites$id$Ethnicity == "Macedo/Bulgarian",]$Code,]
+
+ott_net2 <- ott_net2[ott_net2$to %in% ott_elites$id[ott_elites$id$Ethnicity == "Albanian" | ott_elites$id$Ethnicity == "Kurdish"  |  ott_elites$id$Ethnicity == "Macedo/Bulgarian",]$Code,]
+
+
+#Remove values between 1889-1992 as they are not included in the cooperation data
+ott_elites2[c(2,3,5,7,13,14,16,17,18)] <- lapply(ott_elites2[c(2,3,5,7,13,14,16,17,18)], function(x){
+  x <- x[-c(2,3,4,5)]
+  return(x)
+  }
+  )
+
+``` 
+
+```{r create the igraph data for analysis - a network for each year, echo=FALSE, warning=FALSE, eval=TRUE, error=FALSE}
+#split elite cooperation by onset year and create a new list
+ott.coop.by.year <- split(ott_net2, ott_net2$onset)
+ott.coop.by.year <- ott.coop.by.year[-1]
+
+#create for loop to generate TERGM data as a list of igraph objects
+for(i in 1:length(ott.coop.by.year)){
+  #creating edges for the igraph objects
+  edges <- select(ott.coop.by.year[[i]], from, to) 
+  #create vertices
+  vertices <- ott_elites2$out[ott_elites2$out[i+1] == 1,][1]
+  vertices <- rbind(data.frame(Code=c(edges$from, edges$to)), vertices) %>% distinct()
+  #adding vertex attributes
+  vertices <- left_join(vertices, ott_elites2$id)
+  aut.modified <- ott_elites2$aut.modified[c(1,(i+1))]
+  aut.modified[2] <- sapply(aut.modified[2], as.character)
+  sup.modified <- ott_elites2$sup.modified[c(1,(i+1))]
+  sup.modified[2] <- sapply(sup.modified[2], as.character)
+  viol.modified <- ott_elites2$viol.modified[c(1,(i+1))]
+  viol.modified[2] <- sapply(viol.modified[2], as.character)
+  threat <- ott_elites2$threat[c(1,(i+1))]
+  threat[2] <- sapply(threat[2], as.character)
+  attribute <- data.frame(setNames(cbind(aut.modified[1],aut.modified[2], sup.modified[2], viol.modified[2], threat[2]), c("Code", "Aut.modified", "Sup.modified", "Viol.modified",
+                                                                                                                           "Threat")))
+  vertices <- left_join(vertices, attribute, by="Code")
+  ott.coop.by.year[[i]] <- graph_from_data_frame(d = edges, vertices = vertices, directed = FALSE)
+}
+
+#check
+ott.coop.by.year[[20]]
+
+```
+
+```{r create network objects from igraph objects because btergm package requires network objects, echo=FALSE, warning=FALSE, eval=TRUE}
+
+#create storage
+ott.coop.by.year.no <- ott.coop.by.year
+#create for loop for the BTERGM data as a list of network objects
+for (i in 1:length(ott.coop.by.year)) { 
+  ott.coop.by.year.no[[i]] <- asNetwork(ott.coop.by.year[[i]])
+}
+
+
+```
+
+```{r Visualizing thenetworks for exploratory analysis }
+
+set.seed(1234)
+ott_years <- names(ott.coop.by.year)
+
+
+#specify path
+destination = '/Users/ubeydullahademi/Desktop/Shifting-Alliances/Shifting-Alliances-Nationalist-Elites/plot'
+
+#open PDF
+pdf(file=destination)
+
+
+# add triangle vertex shape
+mytriangle <- function(coords, v=NULL, params) {
+  vertex.color <- params("vertex", "color")
+  if (length(vertex.color) != 1 && !is.null(v)) {
+    vertex.color <- vertex.color[v]
+  }
+  vertex.size <- 1/200 * params("vertex", "size")
+  if (length(vertex.size) != 1 && !is.null(v)) {
+    vertex.size <- vertex.size[v]
+  }
+
+  symbols(x=coords[,1], y=coords[,2], bg=vertex.color,
+          stars=cbind(vertex.size, vertex.size, vertex.size),
+          add=TRUE, inches=FALSE)
+}
+
+# clips as a circle
+add_shape("triangle", clip=shapes("circle")$clip,
+                 plot=mytriangle)
+
+
+par(mfrow = c(2, 2), mai = rep(.2, 4), oma= c(0.1, 0,.5,0))
+
+#save plots to PDF
+for (i in seq(1,28,4)){ 
+  V(ott.coop.by.year[[i]])$color <- ifelse(V(ott.coop.by.year[[i]])$Ethnicity == "Albanian", "brown2", 
+                                          ifelse(V(ott.coop.by.year[[i]])$Ethnicity == "Macedo/Bulgarian", "gold1", 
+                                                 ifelse(V(ott.coop.by.year[[i]])$Ethnicity == "Kurdish", "forestgreen", "black"))) #Colors for etnic group
+  V(ott.coop.by.year[[i]])$shape <- ifelse(V(ott.coop.by.year[[i]])$Aut.modified == "0", "circle", 
+                                          ifelse(V(ott.coop.by.year[[i]])$Aut.modified == "1", "circle", 
+                                                 ifelse(V(ott.coop.by.year[[i]])$Aut.modified == "2", "square", "triangle"))) #shapes for ideology
+  V(ott.coop.by.year[[i]])$label.cex = 0.3
+  E(ott.coop.by.year[[i]])$color <- ifelse(E(ott.coop.by.year[[i]])$nationalist.coop == "inter", "black", 
+                                          ifelse(E(ott.coop.by.year[[i]])$nationalist.coop == "auto", "green",
+                                                 ifelse(E(ott.coop.by.year[[i]])$nationalist.coop == "seces", "red", "yellow"))) #colors for ideological type of cooperation
+  Layout1 <- layout_with_kk(ott.coop.by.year[[i]])
+  plot(ott.coop.by.year[[i]],vertex.size=5, main=ott_years[[i]], layout=Layout1,, vertex.label=NA)
+  V(ott.coop.by.year[[i+1]])$color <- ifelse(V(ott.coop.by.year[[i+1]])$Ethnicity == "Albanian", "brown2", 
+                                          ifelse(V(ott.coop.by.year[[i+1]])$Ethnicity == "Macedo/Bulgarian", "gold1", 
+                                                 ifelse(V(ott.coop.by.year[[i+1]])$Ethnicity == "Kurdish", "forestgreen", "black"))) #Colors for etnic group
+  V(ott.coop.by.year[[i+1]])$shape <- ifelse(V(ott.coop.by.year[[i+1]])$Aut.modified == "0", "circle", 
+                                          ifelse(V(ott.coop.by.year[[i+1]])$Aut.modified == "1", "circle", 
+                                                 ifelse(V(ott.coop.by.year[[i+1]])$Aut.modified == "2", "square", "triangle"))) #shapes for ideology
+  V(ott.coop.by.year[[i+1]])$label.cex = 0.3
+  E(ott.coop.by.year[[i+1]])$color <- ifelse(E(ott.coop.by.year[[i+1]])$nationalist.coop == "inter", "black", 
+                                          ifelse(E(ott.coop.by.year[[i+1]])$nationalist.coop == "auto", "green",
+                                                 ifelse(E(ott.coop.by.year[[i+1]])$nationalist.coop == "seces", "red", "yellow"))) #colors for ideological type of cooperation
+  Layout1 <- layout_with_kk(ott.coop.by.year[[i+1]])
+  plot(ott.coop.by.year[[i+1]],vertex.size=5, main=ott_years[[i+1]], layout=Layout1, vertex.label=NA)
+  V(ott.coop.by.year[[i+2]])$color <- ifelse(V(ott.coop.by.year[[i+2]])$Ethnicity == "Albanian", "brown2", 
+                                          ifelse(V(ott.coop.by.year[[i+2]])$Ethnicity == "Macedo/Bulgarian", "gold1", 
+                                                 ifelse(V(ott.coop.by.year[[i+2]])$Ethnicity == "Kurdish", "forestgreen", "black"))) #Colors for etnic group
+  V(ott.coop.by.year[[i+2]])$shape <- ifelse(V(ott.coop.by.year[[i+2]])$Aut.modified == "0", "circle", 
+                                          ifelse(V(ott.coop.by.year[[i+2]])$Aut.modified == "1", "circle", 
+                                                 ifelse(V(ott.coop.by.year[[i+2]])$Aut.modified == "2", "square", "triangle"))) #shapes for ideology
+  V(ott.coop.by.year[[i+2]])$label.cex = 0.3
+  E(ott.coop.by.year[[i+2]])$color <- ifelse(E(ott.coop.by.year[[i+2]])$nationalist.coop == "inter", "black", 
+                                          ifelse(E(ott.coop.by.year[[i+2]])$nationalist.coop == "auto", "green",
+                                                 ifelse(E(ott.coop.by.year[[i+2]])$nationalist.coop == "seces", "red", "yellow"))) #colors for ideological type of cooperation
+  Layout1 <- layout_with_kk(ott.coop.by.year[[i+2]])
+  plot(ott.coop.by.year[[i+2]],vertex.size=5, main=ott_years[[i+2]], layout=Layout1,, vertex.label=NA)
+  legend(1,-.6,
+         legend = c("Aut", "Sec", "NA"),
+         lty = 1,
+         text.width = strwidth(c("Aut", "Sec", "NA"))[1]/2,
+         pt.bg  = c("tomato", "steelblue", "black"),
+         pch    = c(1,5,2),
+         cex    = c(.7,.7,.7),
+         bty    = "n",
+         title  = "Ideology",
+         xjust = -1)
+  V(ott.coop.by.year[[i+3]])$color <- ifelse(V(ott.coop.by.year[[i+3]])$Ethnicity == "Albanian", "brown2", 
+                                          ifelse(V(ott.coop.by.year[[i+3]])$Ethnicity == "Macedo/Bulgarian", "gold1", 
+                                                 ifelse(V(ott.coop.by.year[[i+3]])$Ethnicity == "Kurdish", "forestgreen", "black"))) #Colors for etnic group
+  V(ott.coop.by.year[[i+3]])$shape <- ifelse(V(ott.coop.by.year[[i+3]])$Aut.modified == "0", "circle", 
+                                          ifelse(V(ott.coop.by.year[[i+3]])$Aut.modified == "1", "circle", 
+                                                 ifelse(V(ott.coop.by.year[[i+3]])$Aut.modified == "2", "square", "triangle"))) #shapes for ideology
+  V(ott.coop.by.year[[i+3]])$label.cex = 0.3
+  E(ott.coop.by.year[[i+3]])$color <- ifelse(E(ott.coop.by.year[[i+3]])$nationalist.coop == "inter", "black", 
+                                          ifelse(E(ott.coop.by.year[[i+3]])$nationalist.coop == "auto", "green",
+                                                 ifelse(E(ott.coop.by.year[[i+3]])$nationalist.coop == "seces", "red", "yellow"))) #colors for ideological type of cooperation
+  Layout1 <- layout_with_kk(ott.coop.by.year[[i+3]])
+  plot(ott.coop.by.year[[i+3]],vertex.size=8, main=ott_years[[i+3]], layout=Layout1, vertex.label=NA)
+  legend(-.5,-.6,
+         legend = c("Albanian", "Bulgarian", "Kurdish"),
+  pt.bg  = c("brown2", "gold1", "forestgreen"),
+  pch    = 21,
+  cex    = c(.7,.7,.7),
+  bty    = "n",
+  title  = "Ethnicity",
+  xjust = 2,
+  lty=-.5
+)
+}
+
+#turn off PDF plotting
+dev.off() 
+
+
+```
+
+```{r - Descriptive Stats - Network Size}
+#count and visualize number of edges in years (size of the cooperation network) 
+#create storage
+gsize.byyear <- data.frame(years = as.numeric(names(ott.coop.by.year)),
+        gsize = double(length=length(ott.coop.by.year)))
+
+#apply function
+for(i in 1:length(ott.coop.by.year)){
+  gsize.byyear[i,2] <- igraph::gsize(ott.coop.by.year[[i]])
+}
+
+#check
+gsize.byyear
+
+#visualize
+ggplot(gsize.byyear, aes(x=years, y=gsize)) +
+  geom_line(color = 'darkorange2') +
+  geom_point(color = 'darkorange3') +
+  scale_x_continuous(name = "Year",
+                     limits=c(1893,1925),
+                     breaks = seq(1893,1925,2)) +
+  scale_y_continuous( name = 'Network Size' 
+                        , limits = c(0, 450)
+                        , breaks = seq(0,450,50)) + 
+  geom_vline(xintercept = 1908,linetype = 2, size = .3) +
+   geom_vline(xintercept = 1911,linetype = 2, size = .3) +
+   geom_vline(xintercept = 1913,linetype = 2, size = .3)
+
+
+#count average number of cooperations per elite by year
+#create storage
+gsizepelite.byyear <- data.frame(years = as.numeric(names(ott.coop.by.year)),
+        gsize = double(length=length(ott.coop.by.year)))
+
+#apply function
+for(i in 1:length(ott.coop.by.year)){
+  gsizepelite.byyear[i,2] <- length(V(ott.coop.by.year[[i]]))/gsize(ott.coop.by.year[[i]])
+}
+
+#check
+gsizepelite.byyear
+        
+#visualize
+ggplot(gsizepelite.byyear, aes(x=years, y=gsize)) +
+  geom_line(color = 'darkorange2') +
+  geom_point(color = 'darkorange3') +
+  scale_x_continuous(name = "Year",
+                     limits=c(1893,1925),
+                     breaks = seq(1893,1925,2)) +
+  scale_y_continuous( name = 'Average Number of Cooperations per Elite' 
+                        , limits = c(0, 40)
+                        , breaks = seq(0,40,5)) + 
+  geom_vline(xintercept = 1908,linetype = 2, size = .3) +
+   geom_vline(xintercept = 1911,linetype = 2, size = .3) +
+   geom_vline(xintercept = 1913,linetype = 2, size = .3)
+
+
+```
+
+```{r - Descriptive Stats - Network Size - 2}
+
+#visualize them together
+ggplot() +
+  geom_line(data=gsize.byyear, aes(x=years, y=gsize, color = 'darkseagreen3')) + 
+  geom_point(data=gsize.byyear, aes(x=years, y=gsize, color = 'Total Number of Cooperations')) +
+  geom_line(data=gsizepelite.byyear, aes(x=years, y=gsize, color = 'darkorange2')) +
+  geom_point(data=gsizepelite.byyear, aes(x=years, y=gsize, color = 'Cooperations per Elite')) +
+  scale_x_continuous(name = "Year",
+                     limits=c(1893,1908),
+                     breaks = seq(1893,1908,2)) +
+  scale_y_continuous( name = 'Number of Cooperations' 
+                        , limits = c(0, 95)
+                        , breaks = seq(0,95,5)) + 
+  geom_vline(xintercept = 1908,linetype = 2, size = .3) +
+   geom_vline(xintercept = 1911,linetype = 2, size = .3) +
+   geom_vline(xintercept = 1913,linetype = 2, size = .3) +
+  scale_color_manual(name='',
+                     breaks=c('Total Number of Cooperations', 'Cooperations per Elite'),
+                     values=c('Cooperations per Elite'='darkorange2', 'Total Number of Cooperations'='darkseagreen4'))
+
+
+```
+
+```{r - Descriptive Stats - Network Size contd}
+#Networks by ethnic groups
+alb_net <- dplyr::select(unique(rbind(ott_net[ott_net$to %in% dplyr::select(dplyr::filter(ott_elites$id, Ethnicity == "Albanian"), Code)$Code,],
+             ott_net[ott_net$from %in% dplyr::select(dplyr::filter(ott_elites$id, Ethnicity == "Albanian"), Code)$Code,])),from,to,onset)
+alb.coop.by.year <- split(alb_net, alb_net$onset)
+
+kurd_net <- dplyr::select(unique(rbind(ott_net[ott_net$to %in% dplyr::select(dplyr::filter(ott_elites$id, Ethnicity == "Kurdish"), Code)$Code,],
+             ott_net[ott_net$from %in% dplyr::select(dplyr::filter(ott_elites$id, Ethnicity == "Kurdish"), Code)$Code,])),from,to,onset)
+kurd.coop.by.year <- split(kurd_net, kurd_net$onset)
+
+bul_net <- dplyr::select(unique(rbind(ott_net[ott_net$to %in% dplyr::select(dplyr::filter(ott_elites$id, Ethnicity == "Macedo/Bulgarian"), Code)$Code,],
+             ott_net[ott_net$from %in% dplyr::select(dplyr::filter(ott_elites$id, Ethnicity == "Macedo/Bulgarian"), Code)$Code,])),from,to,onset)
+bul.coop.by.year <- split(bul_net, bul_net$onset)
+```
+
+```{r - Descriptive Stats - Network Size contd - 2}
+
+#Turn each network into igraph data
+alb.coop.by.year <- lapply(alb.coop.by.year, function(x){
+  #create edges
+  edges <- dplyr::select(x, from, to)
+  #create the necessary character sign
+  extract <- gsub("^([0-9]){2}", "t", as.character(x$onset[1]))
+  #create vertices
+  vertices <- data.frame(Code=c(edges$from, edges$to)) %>% distinct()
+  aut.modified <- cbind(ott_elites2$aut.modified[, 1], ott_elites2$aut.modified[, extract])
+  aut.modified[,2] <- as.character(aut.modified[,2])
+  attribute <- setNames(cbind(aut.modified[1],aut.modified[2]), c("Code", "ideo.pos"))
+  vertices <- left_join(vertices, attribute, by="Code")
+  x <- igraph::graph_from_data_frame(d = edges, vertices = vertices, directed = FALSE)
+  }
+  )
+
+
+kurd.coop.by.year <- lapply(kurd.coop.by.year, function(x){
+  #create edges
+  edges <- dplyr::select(x, from, to)
+  #create the necessary character sign
+  extract <- gsub("^([0-9]){2}", "t", as.character(x$onset[1]))
+  #create vertices
+  vertices <- data.frame(Code=c(edges$from, edges$to)) %>% distinct()
+  aut.modified <- cbind(ott_elites2$aut.modified[, 1], ott_elites2$aut.modified[, extract])
+  aut.modified[,2] <- as.character(aut.modified[,2])
+  attribute <- setNames(cbind(aut.modified[1],aut.modified[2]), c("Code", "ideo.pos"))
+  vertices <- left_join(vertices, attribute, by="Code")
+  x <- igraph::graph_from_data_frame(d = edges, vertices = vertices, directed = FALSE)
+  }
+  )
+
+bul.coop.by.year <- lapply(bul.coop.by.year, function(x){
+  #create edges
+  edges <- dplyr::select(x, from, to)
+  #create the necessary character sign
+  extract <- gsub("^([0-9]){2}", "t", as.character(x$onset[1]))
+  #create vertices
+  vertices <- data.frame(Code=c(edges$from, edges$to)) %>% distinct()
+  aut.modified <- cbind(ott_elites2$aut.modified[, 1], ott_elites2$aut.modified[, extract])
+  aut.modified[,2] <- as.character(aut.modified[,2])
+  attribute <- setNames(cbind(aut.modified[1],aut.modified[2]), c("Code", "ideo.pos"))
+  vertices <- left_join(vertices, attribute, by="Code")
+  x <- igraph::graph_from_data_frame(d = edges, vertices = vertices, directed = FALSE)
+  }
+  )
+
+#check
+alb.coop.by.year
+kurd.coop.by.year 
+bul.coop.by.year
+
+```
+
+```{r - Descriptive Stats - Network Size contd - 3}
+
+#storage for size of each of network
+gsize.byyearalb <- data.frame(years = as.numeric(names(alb.coop.by.year[-1])), gsize = double(length=length(alb.coop.by.year[-1])), group = c("Albanian"))
+gsize.byyearkurd <- data.frame(years = as.numeric(names(kurd.coop.by.year[-1])), gsize = double(length=length(kurd.coop.by.year[-1])), group = c("Kurdish"))
+gsize.byyearbul <- data.frame(years = as.numeric(names(bul.coop.by.year[-1])), gsize = double(length=length(bul.coop.by.year[-1])), group = c("Macedo/Bulgarian"))
+
+
+#network size of alb
+  for(i in 1:(length(alb.coop.by.year)-1)){
+  gsize.byyearalb$gsize[i] <- igraph::gsize(alb.coop.by.year[-1][i][[1]])
+  }
+
+gsize.byyearalb <- arrange(rbind(gsize.byyearalb, data.frame(years=as.numeric(names(ott.coop.by.year))[!(as.numeric(names(ott.coop.by.year)) %in% gsize.byyearalb$years)], 
+                                                             gsize=0, 
+                                                             group=c("Albanian"))), years)
+
+
+#network size of kurd
+for(i in 1:(length(kurd.coop.by.year)-1)){
+  gsize.byyearkurd$gsize[i] <- igraph::gsize(kurd.coop.by.year[-1][i][[1]])
+}
+
+gsize.byyearkurd <- arrange(rbind(gsize.byyearkurd, data.frame(years=as.numeric(names(ott.coop.by.year))[!(as.numeric(names(ott.coop.by.year)) %in% gsize.byyearkurd$years)], 
+                                                               gsize=0, 
+                                                               group=c("Kurdish"))),
+                            years)
+
+
+#network size of bul
+  for(i in 1:(length(bul.coop.by.year)-1)){
+  gsize.byyearbul$gsize[i] <- igraph::gsize(bul.coop.by.year[-1][i][[1]])
+  gsize.byyearbul$years[i] <- as.numeric(names(bul.coop.by.year[-1]))[i]
+  }
+
+gsize.byyearbul <- arrange(rbind(gsize.byyearbul, data.frame(years=as.numeric(names(ott.coop.by.year))[!(as.numeric(names(ott.coop.by.year)) %in% gsize.byyearbul$years)], 
+                                                             gsize=0, 
+                                                             group=c("Macedo/Bulgarian"))),
+                           years)
+
+
+
+#now that we have each network seperately, compare network sizes in proportion to the sum of all 3 networks
+#No data for Albanians and Bulgarians on 1916, add that as 0 connections
+gsize.byyearalb <- rbind(gsize.byyearalb,data.frame(years=1916,gsize=0,group="Albanian"))
+gsize.byyearbul <- rbind(gsize.byyearbul,data.frame(years=1916,gsize=0,group="Macedo/Bulgarian"))
+
+#now add proportion to each
+gsize.byyearalb <- mutate(gsize.byyearalb, proportion = gsize.byyearalb$gsize/(gsize.byyearalb$gsize + gsize.byyearbul$gsize + gsize.byyearkurd$gsize)) %>% filter(!is.na(proportion))
+gsize.byyearkurd <- mutate(gsize.byyearkurd, proportion = gsize.byyearkurd$gsize/(gsize.byyearalb$gsize + gsize.byyearbul$gsize + gsize.byyearkurd$gsize)) %>% filter(!is.na(proportion))
+gsize.byyearbul <- mutate(gsize.byyearbul, proportion = gsize.byyearbul$gsize/(gsize.byyearalb$gsize + gsize.byyearbul$gsize + gsize.byyearkurd$gsize)) %>% filter(!is.na(proportion))
+
+
+gsize.byyear2 <- arrange(rbind(gsize.byyearalb,
+                               gsize.byyearkurd,
+                               gsize.byyearbul), years)
+
+```
+
+```{r - Descriptive Stats - Network Size Visualization}
+#Visualize with faceting
+
+#visualize proportions
+ggplot() +
+  geom_line(data=gsize.byyear2, aes(x=years, y=proportion), color = 'darkorange2') +
+  geom_point(data=gsize.byyear2, aes(x=years, y=proportion), color = 'darkorange3') +
+  facet_wrap(~ group) +
+  scale_x_continuous(name = "Year",
+                     limits=c(1893,1925),
+                     breaks = seq(1893,1925,5)) +
+  scale_y_continuous(name = 'Proportion')
+
+
+#visualize network sizes
+ggplot() +
+  geom_line(data=filter(gsize.byyear2, group != "Kurdish"), aes(x=years, y=gsize), color = 'darkorange2') +
+  geom_point(data=filter(gsize.byyear2, group != "Kurdish"), aes(x=years, y=gsize), color = 'darkorange3') +
+  facet_wrap(~ group) +
+  scale_x_continuous(name = "Year",
+                     limits=c(1893,1925),
+                     breaks = seq(1893,1913,5)) +
+  scale_y_continuous(name = 'Network Sizes of Each Group')
+
+#visualize network sizes
+ggplot() +
+  geom_line(data=filter(gsize.byyear2, group == "Kurdish"), aes(x=years, y=gsize), color = 'darkorange2') +
+  geom_point(data=filter(gsize.byyear2, group == "Kurdish"), aes(x=years, y=gsize), color = 'darkorange3') +
+  facet_wrap(~ group) +
+  scale_x_continuous(name = "Year",
+                     limits=c(1893,1925),
+                     breaks = seq(1893,1925,5)) +
+  scale_y_continuous(name = 'Network Sizes of Each Group')
+
+```
+
+```{r - Descriptive Stats - Ideology Proportion}
+#Networks by ethnic groups
+alb_elites <- rbind(select(alb_net,code=from,year=onset),select(alb_net,code=to,year=onset)) %>%
+  filter(code %in% pull(filter(ott_elites$id, Ethnicity == "Albanian"),Code)) %>%
+  arrange(code, year) %>%
+  distinct()
+
+alb_elites <- cbind(alb_elites, ide.pos=double(length=nrow(alb_elites)))
+
+for(i in 1:nrow(alb_elites)){
+  alb_elites[i,]$ide.pos <- ott_elites2$aut.modified %>%
+    filter(Code == alb_elites[i,]$code) %>%
+    pull(which(names(ott_elites2$aut.modified) == gsub("^([0-9]){2}", "t", as.character(alb_elites[i,]$year))))
+}
+
+alb_elites.2 <- filter(alb_elites, ide.pos != 9)
+
+alb_elites.2$ide.pos <- factor(alb_elites.2$ide.pos, levels = c(0,1,2))
+
+alb_elites.3 <- alb_elites.2 %>%
+  group_by(year, ide.pos) %>%
+  summarise(n = n()) %>%
+  mutate(freq = n/sum(n)) %>%
+  arrange(year, ide.pos)
+
+
+# Plot again
+ggplot(as.data.frame(xtabs(n~year+ide.pos, alb_elites.3)), aes(x = as.numeric(as.character(year)), y = Freq, fill=ide.pos)) + 
+  geom_area(alpha=.80) +
+  scale_fill_discrete(labels=c('Autonomist', 'Tactically Aut. & Ideologically Sec', 'Secessionist')) +
+  guides(fill=guide_legend(title="Ideological Position")) +
+  scale_y_continuous(name = 'Elite Share and Number') +
+  scale_x_continuous(name = 'Year',
+                     limits=c(1893,1913),
+                     breaks = seq(1893,1913,2)) +
+  geom_vline(xintercept = 1908,linetype = 2, size = .3) +
+  geom_vline(xintercept = 1911,linetype = 2, size = .3) +
+  geom_vline(xintercept = 1913,linetype = 2, size = .3)
+  
+
+
+```
+
+```{r -  Descriptive Stats - Ideology Proportion - 2}
+
+bul_elites <- rbind(select(bul_net,code=from,year=onset),select(bul_net,code=to,year=onset)) %>%
+  filter(code %in% pull(filter(ott_elites$id, Ethnicity == "Macedo/Bulgarian"),Code)) %>%
+  arrange(code, year) %>%
+  distinct()
+
+bul_elites <- cbind(bul_elites, ide.pos=double(length=nrow(bul_elites)))
+
+for(i in 1:nrow(bul_elites)){
+  bul_elites[i,]$ide.pos <- ott_elites2$aut.modified %>%
+    filter(Code == bul_elites[i,]$code) %>%
+    pull(which(names(ott_elites2$aut.modified) == gsub("^([0-9]){2}", "t", as.character(bul_elites[i,]$year))))
+}
+
+bul_elites.2 <- filter(bul_elites, ide.pos != 9)
+
+bul_elites.2$ide.pos <- factor(bul_elites.2$ide.pos, levels = c(0,1,2))
+
+bul_elites.3 <- bul_elites.2 %>%
+  group_by(year, ide.pos) %>%
+  summarise(n = n()) %>%
+  mutate(freq = n/sum(n)) %>%
+  arrange(year, ide.pos)
+
+
+# Plot again
+ggplot(as.data.frame(xtabs(n~year+ide.pos, bul_elites.3)), aes(x = as.numeric(as.character(year)), y = Freq, fill=ide.pos)) + 
+  geom_area(alpha=.80) +
+  scale_fill_discrete(labels=c('Autonomist', 'Tactically Aut. & Ideologically Sec', 'Secessionist')) +
+  guides(fill=guide_legend(title="Ideological Position")) +
+  scale_y_continuous(name = 'Elite Share and Number') +
+  scale_x_continuous(name = 'Year',
+                     limits=c(1893,1913),
+                     breaks = seq(1893,1913,2)) +
+  geom_vline(xintercept = 1908,linetype = 2, size = .3) +
+  geom_vline(xintercept = 1911,linetype = 2, size = .3) +
+  geom_vline(xintercept = 1913,linetype = 2, size = .3) 
+
+```
+
+```{r}
+
+kurd_elites <- rbind(select(bul_net,code=from,year=onset),select(bul_net,code=to,year=onset)) %>%
+  filter(code %in% pull(filter(ott_elites$id, Ethnicity == "Macedo/Bulgarian"),Code)) %>%
+  arrange(code, year) %>%
+  distinct()
+
+kurd_elites <- cbind(bul_elites, ide.pos=double(length=nrow(bul_elites)))
+
+for(i in 1:nrow(bul_elites)){
+  bul_elites[i,]$ide.pos <- ott_elites2$aut.modified %>%
+    filter(Code == bul_elites[i,]$code) %>%
+    pull(which(names(ott_elites2$aut.modified) == gsub("^([0-9]){2}", "t", as.character(bul_elites[i,]$year))))
+}
+
+kurd_elites.2 <- filter(kurd_elites, ide.pos != 9)
+
+kurd_elites.2$ide.pos <- factor(kurd_elites.2$ide.pos, levels = c(0,1,2))
+
+kurd_elites.3 <- kurd_elites.2 %>%
+  group_by(year, ide.pos) %>%
+  summarise(n = n()) %>%
+  mutate(freq = n/sum(n)) %>%
+  arrange(year, ide.pos)
+
+
+# Plot again
+ggplot(as.data.frame(xtabs(n~year+ide.pos, kurd_elites.3)), aes(x = as.numeric(as.character(year)), y = Freq, fill=ide.pos)) + 
+  geom_area(alpha=.80) +
+  scale_fill_discrete(labels=c('Autonomist', 'Tactically Aut. & Ideologically Sec', 'Secessionist')) +
+  guides(fill=guide_legend(title="Ideological Position")) +
+  scale_y_continuous(name = 'Elite Share and Number') +
+  scale_x_continuous(name = 'Year',
+                     limits=c(1893,1913),
+                     breaks = seq(1893,1913,2)) +
+  geom_vline(xintercept = 1908,linetype = 2, size = .3) +
+  geom_vline(xintercept = 1911,linetype = 2, size = .3) +
+  geom_vline(xintercept = 1913,linetype = 2, size = .3) 
+
+```
+
+
+```{r - Descriptive Stats - Initial Sample}
+
+initial_sample <- rbind(ott_elites$cooperation %>%
+                          filter(from %in% pull(filter(ott_elites$id, Ethnicity == "Albanian"), Code)) %>%
+                          select(code=from) %>%
+                          unique() %>%
+                          mutate(eth = "Albanian"),
+                        ott_elites$cooperation %>%
+                          filter(from %in% pull(filter(ott_elites$id, Ethnicity == "Macedo/Bulgarian"), Code)) %>%
+                          select(code=from) %>%
+                          unique() %>%
+                          mutate(eth = "Macedo/Bulgarian"),
+                        ott_elites$cooperation %>%
+                          filter(from %in% pull(filter(ott_elites$id, Ethnicity == "Kurdish"), Code)) %>%
+                          select(code=from) %>%
+                          unique() %>%
+                          mutate(eth = "Kurdish"))
+
+
+#export initial sample
+
+initial_sample <- left_join(initial_sample, select(ott_elites$id, Name, Code), by=c("code"="Code")) %>%
+  arrange(code)
+
+initial_sample <- initial_sample %>%
+  mutate(initial_ide_pos = 0)
+
+
+ide.pos <- ott_elites$aut.modified %>%
+  filter(Code %in% initial_sample$code) %>%
+  arrange(Code)
+
+for(i in 1:nrow(ide.pos)){
+  initial_sample$initial_ide_pos[i] <- ifelse(is.na(which(ide.pos[i,][-1] != 9)[1]), 0,
+                                              pull(ide.pos[i,][-1][which(ide.pos[i,][-1] != 9)[1]]))
+  }
+                                              
+
+
+
+
+initial_sample.2 <- split(initial_sample, as.factor(initial_sample$eth))
+
+albanian_initial_list <- flextable(select(initial_sample.2[[1]], Code=code, Name, "Initial Ideological Position"=initial_ide_pos), cwidth = 2.3)
+save_as_docx(albanian_initial_list, path = "/Users/ubeydullahademi/Desktop/Shifting-Alliances/Shifting-Alliances-Nationalist-Elites/alb.init.docx")
+
+kurdish_initial_list <- flextable(select(initial_sample.2[[2]], Code=code, Name, "Initial Ideological Position"=initial_ide_pos), cwidth = 2.3)
+save_as_docx(kurdish_initial_list, path = "/Users/ubeydullahademi/Desktop/Shifting-Alliances/Shifting-Alliances-Nationalist-Elites/kurd.init.docx")
+
+bulgarian_initial_list <- flextable(select(initial_sample.2[[3]], Code=code, Name, "Initial Ideological Position"=initial_ide_pos), cwidth = 2.3)
+save_as_docx(bulgarian_initial_list, path = "/Users/ubeydullahademi/Desktop/Shifting-Alliances/Shifting-Alliances-Nationalist-Elites/mac.init.docx")
+
+```
+
+```{r - Sampling Process Example}
+
+bul_sampling <- ott_elites$cooperation %>%
+  filter(from %in% pull(filter(ott_elites$id, Ethnicity == "Macedo/Bulgarian"), Code) | 
+           to %in% pull(filter(ott_elites$id, Ethnicity == "Macedo/Bulgarian"), Code)) %>%
+  select(from, to, onset) %>%
+  unique() %>%
+  filter(onset == 1903)
+
+
+edges <- select(bul_sampling, from, to) 
+#create vertices
+vertices <- ott_elites2$out[ott_elites2$out["t03"] == 1,][1] %>%
+  filter(Code %in% pull(filter(ott_elites$id, Ethnicity == "Macedo/Bulgarian"), Code))
+  vertices <- rbind(data.frame(Code=c(edges$from, edges$to)), vertices) %>% distinct()
+#adding vertex attributes
+vertices <- left_join(vertices, ott_elites2$id)
+bul_sampling_net <- graph_from_data_frame(d = edges, vertices = vertices, directed = FALSE)
+
+
+#check
+bul_sampling_net
+
+initial_sample.2[[3]]$code
+
+LO <- layout_with_fr(bul_sampling_net)
+isolated <- which(degree(bul_sampling_net)==0)
+delete.vertices(bul_sampling_net, isolated)
+LO2 = LO[-isolated,]
+
+V(bul_sampling_net)$color[which(V(bul_sampling_net)$name %in% initial_sample.2[[3]]$code)] <- "yellow"
+V(bul_sampling_net)$color[which(!(V(bul_sampling_net)$name %in% initial_sample.2[[3]]$code))] <- "sienna1"
+
+plot(bul_sampling_net,vertex.size=7.5, 
+     main="Network of Bulgarian Elites, 1903",
+     vertex.label=V(bul_sampling_net)$Name[-isolated],
+     layout = LO2,
+     vertex.frame.color = "white",  
+     vertex.color = V(bul_sampling_net)$color,
+     vertex.label.color = "black",
+     vertex.label.cex = .9)
+
+legend(.1,1,
+       legend = c("Initial Sample", "1st Wave of Iterations"),
+       #text.width = strwidth(c("Initial Sample", "1st Wave of Iterations"))[1]/2,
+       pt.bg  = c("yellow", "sienna1"),
+       pch    = 21,
+       cex    = c(.7,.7,.7),
+       bty    = "n",
+       xjust = -1,
+       title  = "Sampling Stage")
+
+
+```
+
+```{r Sources}
+
+
+bul_sources <- ott_elites$cooperation %>%
+  select(from, to, onset, source) %>%
+  filter(from %in% pull(filter(ott_elites$id, Ethnicity == "Macedo/Bulgarian"), Code) | 
+           to %in% pull(filter(ott_elites$id, Ethnicity == "Macedo/Bulgarian"), Code)) %>%
+  unique() %>%
+  group_by(source) %>%
+  count() %>%
+  mutate(year = 0, author = "x") %>%
+  arrange(desc(n))
+  
+
+alb_sources <- ott_elites$cooperation %>%
+  select(from, to, onset, source) %>%
+  filter(from %in% pull(filter(ott_elites$id, Ethnicity == "Albanian"), Code) | 
+           to %in% pull(filter(ott_elites$id, Ethnicity == "Albanian"), Code)) %>%
+  unique() %>%
+  group_by(source) %>%
+  count() %>%
+  mutate(year = 0, author = "x") %>%
+  arrange(desc(n))
+
+kurd_sources <- ott_elites$cooperation %>%
+  select(from, to, onset, source) %>%
+  filter(from %in% pull(filter(ott_elites$id, Ethnicity == "Kurdish"), Code) | 
+           to %in% pull(filter(ott_elites$id, Ethnicity == "Kurdish"), Code)) %>%
+  unique() %>%
+  group_by(source) %>%
+  count() %>%
+  mutate(year = 0, author = "x") %>%
+  arrange(desc(n))
+  
+#fix problems alb
+alb_sources$source[3] <- alb_sources$source[11]
+alb_sources$source[5] <- "The Crescent and the Eagle"
+alb_sources$source[4] <- "The Albanian National Awakening"
+alb_sources$source[8] <- "Jon Turklerin Siyasi Fikirleri"
+alb_sources$source[9] <- "Publishers, Hitmen, Diplomats, and Dreamers"
+alb_sources$source[10] <- "For Freedom and Perfection"
+alb_sources$source[12] <- "Turk Parlamento Tarihi"
+
+alb_sources <- alb_sources %>% 
+  group_by(source) %>%
+  summarise(n=sum(n)) %>% 
+  mutate(year = 0, author = "x") %>%
+  arrange(desc(n))
+
+#fix problems bul
+bul_sources$source[10] <- "Region, Regional identity, and Regionalism"
+bul_sources$source[11] <- "Region, Regional identity, and Regionalism"
+bul_sources$source[12] <- "Region, Regional identity, and Regionalism"
+bul_sources$source[8] <- bul_sources$source[9]
+bul_sources$source[1] <- "For Freedom and Perfection"
+bul_sources$source[2] <- "Memories of Gjorcho Petrov"
+bul_sources$source[3] <- "Jön Türkler ve Makedonya Sorunu"
+bul_sources$source[6] <- "Yane Sandanski as a Political Leader in Macedonia"
+bul_sources$source[13] <- "Turkiye'de Siyasal Partiler"
+
+
+bul_sources <- bul_sources %>% 
+  group_by(source) %>%
+  summarise(n=sum(n)) %>% 
+  mutate(year = 0, author = "x") %>%
+  arrange(desc(n))
+
+#fix problems kurd
+kurd_sources$source[21] <- kurd_sources$source[22]
+kurd_sources$source[23] <- kurd_sources$source[22]
+kurd_sources$source[17] <- kurd_sources$source[22]
+kurd_sources$source[2] <- "Kurt Talebe-Hevi Cemiyeti"
+kurd_sources$source[4] <- "Kurdish Notables and the Ottoman State"
+kurd_sources$source[12] <- "Jon Kurtler"
+kurd_sources$source[c(17,21,22,23)] <- "The Emergence of Kurdish Nationalism"
+kurd_sources$source[20] <- "The Crescent and the Eagle"
+kurd_sources$source[14] <- "\"Nationalism\" and Kurdish Notables"
+kurd_sources$source[18] <- "Jon Turklerin Siyasi Fikirleri"
+kurd_sources$source[10] <- "Turkiye'de Siyasal Partiler"
+
+kurd_sources <- kurd_sources %>% 
+  group_by(source) %>%
+  summarise(n=sum(n)) %>% 
+  mutate(year = 0, author = "x") %>%
+  arrange(desc(n))
+
+alb_sour <- tempfile(fileext = ".docx")
+albanian_sources_list <- flextable(select(alb_sources, source, "number of entries" = n, year, author), cwidth = 2.3)
+save_as_docx(albanian_sources_list, path = alb_sour)
+
+kurd_sour <- tempfile(fileext = ".docx")
+kurdish_sources_list <- flextable(select(kurd_sources, source, "number of entries" = n, year, author), cwidth = 2.3)
+save_as_docx(kurdish_sources_list, path = kurd_sour)
+
+bul_sour <- tempfile(fileext = ".docx")
+bulgarian_sources_list <- flextable(select(bul_sources, source, "number of entries" = n, year, author), cwidth = 2.3)
+save_as_docx(bulgarian_sources_list, path = bul_sour)
+
+
+all_sour <- rbind(alb_sources,
+                  bul_sources,
+                  kurd_sources) %>%
+  select(source) %>%
+  unique() %>%
+  sort()
+
+```
+
+```{r Visualize Sources}
+
+alb_sources$source <- factor(alb_sources$source,                                    # Factor levels in decreasing order
+                             levels = alb_sources$source[order(alb_sources$n, decreasing = FALSE)])
+bul_sources$source <- factor(bul_sources$source,                                    # Factor levels in decreasing order
+                             levels = bul_sources$source[order(bul_sources$n, decreasing = FALSE)])
+kurd_sources$source <- factor(kurd_sources$source,                                    # Factor levels in decreasing order
+                             levels = kurd_sources$source[order(kurd_sources$n, decreasing = FALSE)])
+
+
+
+par(mfrow = c(1, 3))
+
+
+
+
+alb_vis <- ggplot(alb_sources, aes(x=source, y=n)) +
+  geom_col(fill="skyblue") + 
+  geom_text(aes(label=label_percent()(n/sum(n))), vjust=0, hjust=.5, color="black", size=3.5)+
+  theme_minimal() +
+  coord_flip() + 
+  scale_y_continuous(name = "Number of Entries",
+                     limits=c(0,151),
+                     breaks = seq(0,151,10)) +
+  ggtitle("Albanian Elites Data Source Distribution") +
+  xlab("Source")
+
+bul_vis <- ggplot(bul_sources, aes(x=source, y=n)) +
+  geom_col(fill="skyblue") + 
+  geom_text(aes(label=label_percent()(n/sum(n))), vjust=0, hjust=.5, color="black", size=3.5)+
+  theme_minimal() +
+  coord_flip() + 
+  scale_y_continuous(name = "Number of Entries",
+                     limits=c(0,177),
+                     breaks = seq(0,177,10)) +
+  ggtitle("Bulgarian Elites Data Source Distribution") +
+  xlab("Source")
+
+kurd_vis <- ggplot(kurd_sources, aes(x=source, y=n)) +
+  geom_col(fill="skyblue") + 
+  geom_text(aes(label=label_percent()(n/sum(n))), vjust=0, hjust=.5, color="black", size=3.5)+
+  theme_minimal() +
+  coord_flip() + 
+  scale_y_continuous(name = "Number of Entries",
+                     limits=c(0,492),
+                     breaks = seq(0,492,40)) +
+  ggtitle("Kurdish Elites Data Source Distribution") +
+  xlab("Source")
+
+
+
+```
+
+
+
+```{r - Descriptive Stats - Threat Perception Proportion}
+threat.prop <- data.frame(year=numeric(), nothreat=integer(), threat=integer(), prop.t=integer())
+for(i in 1:length(ott.coop.by.year)){
+  threat.prop[i,] <- data.frame(year=as.numeric(names(ott.coop.by.year[i])),
+                                nothreat=length(which(V(ott.coop.by.year[[i]])$Threat == "0")),
+                                threat=length(which(V(ott.coop.by.year[[i]])$Threat == "1")))
+  }
+
+threat.prop$prop.t <- threat.prop$threat/(threat.prop$nothreat+threat.prop$threat)
+
+
+ggplot(data=threat.prop, aes(y=prop.t, x=year, color="Proportion of Threat Perception among the Elites"))+
+  geom_line() +
+  geom_point() + 
+  scale_x_continuous(name = "Year",
+                     limits=c(1893,1925),
+                     breaks = seq(1893,1925,2)) +
+  scale_y_continuous( name = 'Threat Perception' 
+                        , limits = c(0, 1)
+                        , breaks = seq(0,1,.2)) + 
+  geom_vline(xintercept = 1908,linetype = 2, size = .3) +
+   geom_vline(xintercept = 1911,linetype = 2, size = .3) +
+   geom_vline(xintercept = 1913,linetype = 2, size = .3) +
+  scale_color_manual(name='',
+                     breaks=c('Proportion of Threat Perception among the Elites'),
+                     values=c('Proportion of Threat Perception among the Elites'='darkorange2'))
+
+
+
+```
+
+```{r - Descriptive Stats - Dynamic Network Stats}
+ott.dyn <- networkDynamic(network.list = ott.coop.by.year.no, vertex.pid = "vertex.names")
+
+# add tergm stats
+termstats <- tErgmStats(ott.dyn, "~ edges+triangle+concurrent+transitiveties") # Notice the increase in triangles
+
+#extract triangles
+termstats2 <- data.frame(years=as.numeric(names(ott.coop.by.year)),
+                        triangles=termstats[,2][2:32])
+
+#visualize number of triangles
+ggplot() +
+  geom_line(data=termstats2, aes(x=years, y=triangles), color = 'darkorange2') +
+  geom_point(data=termstats2, aes(x=years, y=triangles), color = 'darkorange3') +
+  scale_x_continuous(name = "Year",
+                     limits=c(1893,1925),
+                     breaks = seq(1893,1925,5)) +
+  scale_y_continuous(name = 'Triangles in the Network') +
+  geom_vline(xintercept = 1907,linetype = 2, size = .3) +
+   geom_vline(xintercept = 1910,linetype = 2, size = .3) +
+   geom_vline(xintercept = 1913,linetype = 2, size = .3)
+
+
+```
+
+```{r - Descriptive Stats - Dynamic Network Stats contd}
+#degree distribution
+ott.ddist <- lapply(ott.coop.by.year.no,ergm::degreedist)
+
+
+#create storage
+ott.ddist2 <- data.frame(degree = double(),
+                         n = double())
+
+#count number of degrees
+for(i in 1:length(ott.ddist)){
+  ott.ddist2 <- rbind(ott.ddist2, data.frame(degree = as.numeric(gsub("degree", "", attributes(ott.ddist[[i]])$names)), 
+                                             n = unname(ott.ddist[[i]])))
+}
+
+#count number of degrees and their proportion
+ott.ddist2 <- ott.ddist2 %>%
+  group_by(degree) %>%
+  summarize(sum(n))
+
+ott.ddist2$proportion <- ott.ddist2$`sum(n)`/sum(ott.ddist2$`sum(n)`)
+
+#visualize
+ggplot(ott.ddist2, aes(x=degree, y=proportion)) + 
+  geom_bar(stat="identity", fill = "darkorange2") + 
+  scale_x_continuous(name = "Degree",
+                     limits=c(-1,15),
+                     breaks = seq(0,15,3)) +
+  scale_y_continuous( name = 'Percentage' 
+                        , limits = c(0, .6)
+                        , breaks = seq(0,.7,.1))
+```
+
+```{r - Descriptive Stats - Degree Dist/Centrality of Ind Vertices}
+#Most popular elite for each year
+#storage
+ott.pop <- data.frame(year = double(), code = character(), dg = double())
+
+for(i in 1:length(ott.coop.by.year)){
+  ott.pop <- rbind(ott.pop,
+                   data.frame(year=as.numeric(names(ott.coop.by.year[i])),
+                              code=attributes(igraph::degree(ott.coop.by.year[[i]]))$names,
+                              dg=unname(igraph::degree(ott.coop.by.year[[i]]))) %>%
+                     filter(dg == max(dg)))
+}
+
+#add name and ethnicity
+colnames(ott.pop) <- c("Year", "Code", "Dg")
+
+ott.pop <- left_join(ott.pop, dplyr::select(ott_elites$id[ott_elites$id$Code %in% ott.pop$Code,], Code, Name, Ethnicity), 
+          by = "Code")
+
+ott.pop <- ott.pop[(ott.pop$Ethnicity != 84),]
+
+
+#visualize most popular elites for each year
+ggplot(ott.pop, aes(x=Year, y=Dg, fill = factor(Ethnicity), label=Name)) + 
+  geom_point(color='black', shape=21, size=2) +
+  geom_text(hjust=0, vjust=0,
+            position = position_dodge(width=0.9),  size=2.2) + 
+  scale_fill_manual(values=c("Red", "Green", "Yellow")) + 
+  scale_x_continuous(name = "Years",
+                     limits=c(1893, 1925),
+                     breaks = seq(1893,1925,2)) +
+  scale_y_continuous(name = "Degree")
+
+```
+
+
+```{r - Descriptive Stats - Degree Dist/Centrality of Ind Vertices - 2}
+#visualize invidiual elites' popularity
+
+#storage for Yane Sandanski
+jansan.pop <- data.frame(year = double(), code = character(), dg = double(), name=character())
+
+for(i in 1:length(ott.coop.by.year)){
+  jansan.pop <- rbind(jansan.pop,
+                      data.frame(year=as.numeric(names(ott.coop.by.year[i])),
+                                 code="JANSAN",
+                                 dg=ifelse(length(unname(igraph::degree(ott.coop.by.year[[i]])[attributes(igraph::degree(ott.coop.by.year[[i]]))$names == "JANSAN"])) == 0, 0,
+                                           unname(igraph::degree(ott.coop.by.year[[i]])[attributes(igraph::degree(ott.coop.by.year[[i]]))$names == "JANSAN"])),
+                                 name = "Yane Sandanski")
+  )
+}
+
+#visualize 
+ggplot(jansan.pop, aes(x=year, y=dg)) + 
+  geom_line(data=jansan.pop, aes(x=year, y=dg), color = 'darkorange2') +
+  geom_point(data=jansan.pop, aes(x=year, y=dg), color='darkorange4', size=2) +
+  scale_x_continuous(name = "Years",
+                     limits=c(1893, 1925),
+                     breaks = seq(1893,1925,2)) +
+  scale_y_continuous(name = "Number of Cooperations, Yane Sandanski") 
+
+
+
+#storage for Gyorche Petrov
+gepet.pop <- data.frame(year = double(), code = character(), dg = double(), name=character())
+
+for(i in 1:length(ott.coop.by.year)){
+  gepet.pop <- rbind(gepet.pop,
+                      data.frame(year=as.numeric(names(ott.coop.by.year[i])),
+                                 code="GEPET",
+                                 dg=ifelse(length(unname(igraph::degree(ott.coop.by.year[[i]])[attributes(igraph::degree(ott.coop.by.year[[i]]))$names == "GEPET"])) == 0, 0,
+                                           unname(igraph::degree(ott.coop.by.year[[i]])[attributes(igraph::degree(ott.coop.by.year[[i]]))$names == "GEPET"])),
+                                 name = "Gyroche Petrov")
+  )
+  }
+
+
+#visualize 
+ggplot(gepet.pop, aes(x=year, y=dg)) + 
+  geom_line(data=gepet.pop, aes(x=year, y=dg), color = 'darkorange2') +
+  geom_point(data=gepet.pop, aes(x=year, y=dg), color='darkorange4', size=2) +
+  scale_x_continuous(name = "Years",
+                     limits=c(1893, 1925),
+                     breaks = seq(1893,1925,2)) +
+  scale_y_continuous(name = "Number of Cooperations, Gyorche Petrov") 
+
+
+#visualize JANSAN & GEPET network sizes to show rise of ideology = 1 before 1908
+ggplot() +
+  geom_line(data=rbind(jansan.pop, gepet.pop), aes(x=year, y=dg), color = 'darkorange2') +
+  geom_point(data=rbind(jansan.pop, gepet.pop), aes(x=year, y=dg), color = 'darkorange3') +
+  facet_wrap(~ name) +
+  scale_x_continuous(name = "Year",
+                     limits=c(1893,1925),
+                     breaks = seq(1893,1925,5)) +
+  scale_y_continuous(name = 'Network Sizes of ')
+
+
+```
+
+```{r - Descriptive Stats Continued - Most Frequent Triangles}
+
+#Define function to extract Triangles
+ott.triangles <- function(x){
+  k <- attributes(igraph::triangles(x))$names #put igraph object
+  df <- data.frame(a=seq(1,length(k),3),
+                   b=seq(2,length(k),3),
+                   c=seq(3,length(k),3))
+  y <- data.frame(triangles = character())
+  for(i in c(1:c(length(k)/3))){
+    y <- rbind(y, data.frame(triangles=paste(sort(c(k[df[i,1]], 
+                                                    k[df[i,2]],
+                                                    k[df[i,3]])),
+                                             collapse = "-")))
+   }
+  return(y)
+}
+
+
+#Apply to networks that has a triangle
+z <- c()
+for(i in c(1:length(ott.coop.by.year))){
+  z[i] <- length(igraph::triangles(ott.coop.by.year[[i]]))
+}
+
+#Find the most frequent triangles
+#there is not much repetition in triangles
+triangles <- arrange(data.frame(table(bind_rows(lapply(ott.coop.by.year[-which(z==0)], ott.triangles))$triangles)))
+triangle.codes <- strsplit(as.character(triangles$Var1), split="-")
+triangles.2 <- data.frame(A=character(),
+                          B=character(),
+                          C=character())
+
+#extract names from the elites data
+for(i in c(1:length(triangle.codes))){
+  triangles.2 <- rbind(triangles.2, data.frame(A=ott_elites$id[ott_elites$id$Code == triangle.codes[[i]][1],]$Name,
+                                B=ott_elites$id[ott_elites$id$Code == triangle.codes[[i]][2],]$Name,
+                                C=ott_elites$id[ott_elites$id$Code == triangle.codes[[i]][3],]$Name))
+}
+
+triangles.2 <- arrange(cbind(triangles.2, freq=triangles$Freq), desc(freq))
+
+x <- rbind(triangles.2 %>%
+             group_by(from=A,to=B) %>%
+             count() %>%
+             arrange(desc(n)),
+           triangles.2 %>%
+             group_by(from=B,to=C) %>%
+             count() %>%
+             arrange(desc(n)),
+           triangles.2 %>%  
+             group_by(from=A,to=C) %>% 
+             count() %>%  
+             arrange(desc(n))) 
+
+
+
+
+for(i in 1:nrow(x)){
+  k <- sort(data.frame(rbind(x[i,]$from, x[i,]$to)))
+  x$dyad[i] <- paste0(k[1,], "-", k[2,])
+}
+
+
+```
+
+
+
+```{r BTERGM Model}
+
+#clean NAs
+ott.coop.by.year[[5]] <- igraph::set.vertex.attribute(ott.coop.by.year[[5]],'Sup.modified',which(is.na(igraph::get.vertex.attribute(ott.coop.by.year[[5]],'Sup.modified'))),"9")
+ott.coop.by.year.no[[5]] <- asNetwork(ott.coop.by.year[[5]])
+
+?asNetwork
+
+set.seed(12345)
+
+m1 <- btergm(ott.coop.by.year.no[c(1:27)] ~ edges + #counts edges
+               #adding endogenous effects
+               kstar(2) +
+               gwesp(1, fixed=TRUE) + 
+               #transitiveties + #counts the number of edges in the network that are
+               #embedded in at least one transitive triple
+               nodefactor("Aut.modified") + 
+               nodematch("Aut.modified") +
+               nodefactor("Sup.modified") + 
+               #nodematch("Sup.modified") +
+               #nodefactor("Viol.modified") + 
+               #nodematch("Viol.modified") + 
+               nodematch("Religion") + 
+               nodefactor("Threat") +
+               #nodematch("Threat") +
+               nodematch("Ethnicity") +
+               isolates +
+               memory(type="stability"), R=50)
+
+
+
+summary(m1)
+
+```
+
+```{r BTERGM Pools}
+
+pool1 <- ott.coop.by.year.no[c(1:15)]
+pool2 <- ott.coop.by.year.no[c(16:18)]
+pool3 <- ott.coop.by.year.no[c(19:21)]
+pool4 <- ott.coop.by.year.no[c(23:27)]
+
+```
+
+```{r BTERGM Pooled Models}
+
+pool1.m18 <- btergm(pool1 ~ edges + #counts edges
+                      #adding endogenous effects
+                      kstar(2) +
+                      gwesp(1, fixed=TRUE) +
+                      #transitiveties + #counts the number of edges in the network that 
+                      #embedded in at least one transitive triple
+                      nodefactor("Aut.modified") + 
+                      nodematch("Aut.modified") +
+                      nodefactor("Sup.modified") + 
+                      #nodematch("Sup.modified") +
+                      #nodematch("Viol.modified") + 
+                      nodefactor("Viol.modified") + 
+                      nodematch("Ethnicity") +
+                      #nodematch("Subdiv") +
+                      #nodematch("Threat") +
+                      nodefactor("Threat") +
+                      isolates +
+                      memory(type="stability"), R=100)
+
+pool2.m18 <- btergm(pool2 ~ edges + #counts edges
+                      #adding endogenous effects
+                      kstar(2) +
+                      gwesp(1, fixed=TRUE) +
+                      #transitiveties + #counts the number of edges in the network that 
+                      #embedded in at least one transitive triple
+                      nodefactor("Aut.modified") + 
+                      nodematch("Aut.modified") +
+                      nodefactor("Sup.modified") + 
+                      #nodematch("Sup.modified") +
+                      #nodematch("Viol.modified") + 
+                      nodefactor("Viol.modified") + 
+                      nodematch("Ethnicity") +
+                      #nodematch("Subdiv") +
+                      #nodematch("Threat") +
+                      nodefactor("Threat") +
+                      isolates +
+                      memory(type="stability"), R=500)
+
+pool3.m18 <- btergm(pool3 ~ edges + #counts edges
+                      #adding endogenous effects
+                      kstar(2) +
+                      gwesp(1, fixed=TRUE) +
+                      #transitiveties + #counts the number of edges in the network that 
+                      #embedded in at least one transitive triple
+                      nodefactor("Aut.modified") + 
+                      nodematch("Aut.modified") +
+                      nodefactor("Sup.modified") + 
+                      #nodematch("Sup.modified") +
+                      #nodematch("Viol.modified") + 
+                      nodefactor("Viol.modified") + 
+                      nodematch("Ethnicity") +
+                      nodematch("Threat") +
+                      nodefactor("Threat") +
+                      #nodematch("Subdiv") + 
+                      isolates +
+                      memory(type="stability"), R=500)
+
+pool4.m18 <- btergm(pool4 ~ edges + #counts edges
+                      #adding endogenous effects
+                      kstar(2) +
+                      gwesp(1, fixed=TRUE) +
+                      #transitiveties + #counts the number of edges in the network that 
+                      #embedded in at least one transitive triple
+                      nodefactor("Aut.modified") + 
+                      #nodefactor("Sup.modified") + 
+                      nodematch("Aut.modified") +
+                      nodematch("Sup.modified") +
+                      nodematch("Viol.modified") + 
+                      #nodefactor("Viol.modified") + 
+                      #nodematch("Subdiv") +
+                      #nodematch("Threat") +
+                      nodefactor("Threat") +
+                      #nodematch("Ethnicity") +
+                      isolates +
+                      memory(type="stability"), R=500)
+
+summary(pool1.m18) 
+summary(pool2.m18)
+summary(pool3.m18)
+summary(pool4.m18)
+
+```
+
+```{r Report Models with texreg}
+
+htmlreg(list(pool1.m18,pool2.m18,pool3.m18, pool4.m18), file = "btergmreports2.doc",
+        custom.header = list("Pooled Models" = 1:4),
+        custom.model.names = c("1893-1907", "1908-1910", "1911-1913", "1917-1921"),
+        custom.coef.map = list("edges" = "Edges", 
+                               "kstar2" = "Two-Stars", 
+                               "gwesp.fixed.1" = "GWESP", 
+                               "nodefactor.Aut.modified.1" = "Nodefactor, Ideology = 1",
+                               "nodefactor.Aut.modified.2" = "Nodefactor, Ideology = 2",
+                               "nodefactor.Sup.modified.1" = "Nodefactor, Foreign Support = 1",
+                               "nodefactor.Sup.modified.2" = "Nodefactor, Foreign Support = 2",
+                               "nodefactor.Viol.modfieid.1" = "Nodefactor, Violence = 1",
+                               "nodefactor.Viol.modfieid.2" = "Nodefactor, Violence = 2",
+                               "nodefactor.Threat.1" = "Nodefactor, Threat = 1",
+                               "nodematch.Aut.modified" = "Nodematch, Ideology",
+                               "nodematch.Sup.modified" = "Nodematch, Foreign Support",
+                               "nodematch.Viol.modified" = "Nodematch, Violence",
+                               "nodematch.Threat" = "Nodematch, Threat",
+                               "nodematch.Ethnicity" = "Nodematch, Ethnicity",
+                               "nodematch.Religion" = "Nodematch, Religion",
+                               "isolates" = "Isolates",
+                               "edgecov.memory[[i]]" = "Memory Term"),
+        single.row = TRUE,
+        custom.note = "%stars",
+        digits = 2,
+        inline.css = FALSE,
+        doctype = TRUE,
+        html.tag = TRUE,
+        head.tag = TRUE,
+        body.tag = TRUE,
+        table.margin = 0,
+        outer.rules = 0
+        )
+
+
+htmlreg(list(m1), file = "un-pooledresults.doc",
+        custom.header = list("Un-Pooled Models" = 1),
+        custom.model.names = c("1893-1921"),
+        custom.coef.map = list("edges" = "Edges", 
+                               "kstar2" = "Two-Stars", 
+                               "gwesp.fixed.1" = "GWESP", 
+                               "nodefactor.Aut.modified.1" = "Nodefactor, Ideology = 1",
+                               "nodefactor.Aut.modified.2" = "Nodefactor, Ideology = 2",
+                               "nodefactor.Sup.modified.1" = "Nodefactor, Foreign Support = 1",
+                               "nodefactor.Sup.modified.2" = "Nodefactor, Foreign Support = 2",
+                               "nodefactor.Viol.modfieid.1" = "Nodefactor, Violence = 1",
+                               "nodefactor.Viol.modfieid.2" = "Nodefactor, Violence = 2",
+                               "nodefactor.Threat.1" = "Nodefactor, Threat = 1",
+                               "nodematch.Aut.modified" = "Nodematch, Ideology",
+                               "nodematch.Sup.modified" = "Nodematch, Foreign Support",
+                               "nodematch.Viol.modified" = "Nodematch, Violence",
+                               "nodematch.Threat" = "Nodematch, Threat",
+                               "nodematch.Ethnicity" = "Nodematch, Ethnicity",
+                               "nodematch.Religion" = "Nodematch, Religion",
+                               "isolates" = "Isolates",
+                               "edgecov.memory[[i]]" = "Memory Term"),
+        single.row = TRUE,
+        custom.note = "%stars",
+        digits = 2,
+        inline.css = FALSE,
+        doctype = TRUE,
+        html.tag = TRUE,
+        head.tag = TRUE,
+        body.tag = TRUE,
+        table.margin = 0,
+        outer.rules = 0
+        )
+
+
+```
+
+```{r BTERGM GOF}
+
+library(btergm)
+
+set.seed(123)
+pool1.m18.gof <- btergm(pool1 ~ edges + #counts edges
+                      #adding endogenous effects
+                      kstar(2) +
+                      gwesp(1, fixed=TRUE) +
+                      #transitiveties + #counts the number of edges in the network that 
+                      #embedded in at least one transitive triple
+                      #nodefactor("Aut.modified") + 
+                      nodematch("Aut.modified") +
+                      #nodefactor("Sup.modified") + 
+                      #nodematch("Sup.modified") +
+                      #nodematch("Viol.modified") + 
+                      nodefactor("Viol.modified") + 
+                      nodematch("Ethnicity") +
+                      #nodematch("Religion") +
+                      #nodematch("Subdiv") +
+                      #nodematch("Threat") +
+                      #nodefactor("Threat") +
+                      isolates +
+                      memory(type="stability"), R=100)
+
+
+pool1.m18.gof.2 <- btergm(ott.coop.by.year.no[c(1:14)] ~ edges + #counts edges
+                      #adding endogenous effects
+                      kstar(2) +
+                      gwesp(1, fixed=TRUE) +
+                      #transitiveties + #counts the number of edges in the network that 
+                      #embedded in at least one transitive triple
+                      #nodefactor("Aut.modified") + 
+                      nodematch("Aut.modified") +
+                      #nodefactor("Sup.modified") + 
+                      #nodematch("Sup.modified") +
+                      #nodematch("Viol.modified") + 
+                      nodefactor("Viol.modified") + 
+                      nodematch("Ethnicity") +
+                      #nodematch("Religion") +
+                      #nodematch("Subdiv") +
+                      #nodematch("Threat") +
+                      #nodefactor("Threat") +
+                      isolates +
+                      memory(type="stability"), R=100)
+
+
+
+
+#pdf("gof.pdf", width = 9, height = 7)
+#plot(gof_object)
+#dev.off()
+
+
+
+pool2.m18.gof <- btergm(pool2 ~ edges + #counts edges
+                      #adding endogenous effects
+                      kstar(2) +
+                      gwesp(1, fixed=TRUE) +
+                      #transitiveties + #counts the number of edges in the network that 
+                      #embedded in at least one transitive triple
+                      nodefactor("Aut.modified") + 
+                      nodematch("Aut.modified") +
+                      nodefactor("Sup.modified") + 
+                      #nodematch("Sup.modified") +
+                      #nodematch("Viol.modified") + 
+                      nodefactor("Viol.modified") + 
+                      nodematch("Ethnicity") +
+                      #nodematch("Subdiv") +
+                      #nodematch("Threat") +
+                      nodefactor("Threat") +
+                      isolates +
+                      memory(type="stability"), R=50)
+
+pool2.m18.gof.2 <- btergm(ott.coop.by.year.no[c(16:17)] ~ edges + #counts edges
+                      #adding endogenous effects
+                      kstar(2) +
+                      gwesp(1, fixed=TRUE) +
+                      #transitiveties + #counts the number of edges in the network that 
+                      #embedded in at least one transitive triple
+                      nodefactor("Aut.modified") + 
+                      nodematch("Aut.modified") +
+                      nodefactor("Sup.modified") + 
+                      #nodematch("Sup.modified") +
+                      #nodematch("Viol.modified") + 
+                      nodefactor("Viol.modified") + 
+                      nodematch("Ethnicity") +
+                      #nodematch("Subdiv") +
+                      #nodematch("Threat") +
+                      nodefactor("Threat") +
+                      isolates +
+                      memory(type="stability"), R=100)
+
+
+
+pool3.m18.gof <- btergm(pool3 ~ edges + #counts edges
+                      #adding endogenous effects
+                      kstar(2) +
+                      gwesp(1, fixed=TRUE) +
+                      #transitiveties + #counts the number of edges in the network that 
+                      #embedded in at least one transitive triple
+                      nodefactor("Aut.modified") + 
+                      nodematch("Aut.modified") +
+                      nodefactor("Sup.modified") + 
+                      #nodematch("Sup.modified") +
+                      #nodematch("Viol.modified") + 
+                      nodefactor("Viol.modified") + 
+                      nodematch("Ethnicity") +
+                      nodematch("Threat") +
+                      nodefactor("Threat") +
+                      #nodematch("Subdiv") + 
+                      isolates +
+                      memory(type="stability"), R=100)
+
+pool3.m18.gof.2 <- btergm(ott.coop.by.year.no[c(19:21)] ~ edges + #counts edges
+                      #adding endogenous effects
+                      kstar(2) +
+                      gwesp(1, fixed=TRUE) +
+                      #transitiveties + #counts the number of edges in the network that 
+                      #embedded in at least one transitive triple
+                      #nodefactor("Aut.modified") + 
+                      nodematch("Aut.modified") +
+                      nodefactor("Sup.modified") + 
+                      #nodematch("Sup.modified") +
+                      #nodematch("Viol.modified") + 
+                      nodematch("Ethnicity") +
+                      #nodefactor("Viol.modified") + 
+                      #nodematch("Threat") +
+                      #nodefactor("Threat") +
+                      #nodematch("Subdiv") + 
+                      isolates +
+                      memory(type="stability"), R=100)
+
+
+pool4.m18.gof <- btergm(ott.coop.by.year.no[c(23:27)] ~ edges + #counts edges
+                      #adding endogenous effects
+                      kstar(2) +
+                      gwesp(1, fixed=TRUE) +
+                      #transitiveties + #counts the number of edges in the network that 
+                      #embedded in at least one transitive triple
+                      nodefactor("Aut.modified") + 
+                      nodematch("Aut.modified") +
+                      #nodefactor("Sup.modified") + 
+                      nodematch("Sup.modified") +
+                      nodematch("Viol.modified") + 
+                      #nodefactor("Viol.modified") + 
+                      #nodematch("Ethnicity") +
+                      #nodematch("Subdiv") +
+                      #nodematch("Threat") +
+                      #nodefactor("Threat") +
+                      isolates +
+                      memory(type="stability"), R=100)
+
+pool4.m18.gof.2 <- btergm(ott.coop.by.year.no[c(23:26)] ~ edges + #counts edges
+                      #adding endogenous effects
+                      kstar(2) +
+                      gwesp(1, fixed=TRUE) +
+                      #transitiveties + #counts the number of edges in the network that 
+                      #embedded in at least one transitive triple
+                      nodefactor("Aut.modified") + 
+                      nodematch("Aut.modified") +
+                      #nodefactor("Sup.modified") + 
+                      nodematch("Sup.modified") +
+                      nodematch("Viol.modified") + 
+                      #nodefactor("Viol.modified") + 
+                      #nodematch("Ethnicity") +
+                      #nodematch("Subdiv") +
+                      #nodematch("Threat") +
+                      #nodefactor("Threat") +
+                      isolates +
+                      memory(type="stability"), R=100)
+
+gof_object.1.out.of.sample <- btergm::gof(pool1.m18.gof.2, target=ott.coop.by.year.no[[15]], statistics = c(dsp, esp, deg, geodesic, triad.undirected, walktrap.modularity), nsim = 10)
+plot(gof_object.1.out.of.sample, xlim=10, main="gof_object.1.out.of.sample") 
+
+gof_object.1.within.sample <- btergm::gof(pool1.m18.gof, statistics = c(dsp, esp, deg, geodesic, triad.undirected, walktrap.modularity), nsim = 10)
+plot(gof_object.1.within.sample, xlim=10, main="gof_object.1.within.sample") 
+
+
+gof_object.2.within.sample <- btergm::gof(pool2.m18.gof, statistics = c(dsp, esp, deg, geodesic, triad.undirected, walktrap.modularity), nsim = 10)
+plot(gof_object.2.within.sample, xlim=10, main="gof_object.2.within.sample") 
+
+gof_object.2.out.of.sample <- btergm::gof(pool1.m18.gof.2, target=ott.coop.by.year.no[[18]], statistics = c(dsp, esp, deg, geodesic, triad.undirected, walktrap.modularity), nsim = 10)
+plot(gof_object.2.out.of.sample, xlim=10, main="gof_object.2.out.of.sample")
+
+
+
+gof_object.3.within.sample <- btergm::gof(pool3.m18.gof, statistics = c(dsp, esp, deg, geodesic, triad.undirected, walktrap.modularity), nsim = 10)
+plot(gof_object.3.within.sample, xlim=40, xlab="gof_object.3.within.sample") 
+
+gof_object.3.out.of.sample <- btergm::gof(pool3.m18.gof.2, target=ott.coop.by.year.no[[22]], statistics = c(dsp, esp, deg, geodesic, triad.undirected, walktrap.modularity), nsim = 10)
+plot(gof_object.3.out.of.sample, xlim=40, xlab="gof_object.3.out.of.sample")
+
+
+
+gof_object.4.within.sample <- btergm::gof(pool4.m18.gof, statistics = c(dsp, esp, deg, geodesic, triad.undirected, walktrap.modularity), nsim = 10)
+plot(gof_object.4.within.sample, xlim=10, xlab="gof_object.4.within.sample") 
+
+gof_object.4.out.of.sample <- btergm::gof(pool4.m18.gof.2, target=ott.coop.by.year.no[[27]], statistics = c(dsp, esp, deg, geodesic, triad.undirected, walktrap.modularity), nsim = 10)
+plot(gof_object.4.out.of.sample, xlim=10)
+
+
+```
+
+```{r}
+plot(gof_object.1.out.of.sample, xlim=10)
+plot(gof_object.1.within.sample, xlim=40)
+
+plot(gof_object.2.out.of.sample, xlim=10)
+plot(gof_object.2.within.sample, xlim=40)
+
+plot(gof_object.3.out.of.sample, xlim=10)
+plot(gof_object.3.within.sample, xlim=10) 
+
+plot(gof_object.4.out.of.sample, xlim=10)
+plot(gof_object.4.within.sample, xlim=10) 
+```
+
+
+
